@@ -1,0 +1,39 @@
+{
+  "name": "fractal-dao-contracts",
+  "version": "0.1",
+  "description": "Fractal Dao contracts.",
+  "author": "",
+  "engines": {
+    "node": ">=19.9.0"
+  },
+  "scripts": {
+    "compile": "npx scrypt-cli compile"
+  },
+  "lint-staged": {
+    "**/*": [
+      "prettier --write --ignore-unknown"
+    ],
+    "**/*.{ts,js}": [
+      "eslint --cache --fix"
+    ]
+  },
+  "dependencies": {
+    "@cmdcode/tapscript": "^1.4.6",
+    "bigi": "^1.4.2",
+    "bitcoinjs-lib": "^6.1.6",
+    "bitcore-lib-inquisition": "^10.0.30",
+    "cbor": "^9.0.2",
+    "dotenv": "^16.4.5",
+    "ecpair": "^2.1.0",
+    "ecurve": "^1.0.6",
+    "js-sha256": "^0.9.0",
+    "scrypt-ts": "latest",
+    "tiny-secp256k1": "^2.2.3"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@cmdcode/crypto-tools": "^2.7.4",
+    "@types/node": "^22.5.2",
+    "superagent": "^10.1.0"
+  }
+}
