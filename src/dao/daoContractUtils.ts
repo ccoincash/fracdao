@@ -218,11 +218,6 @@ export async function unlockStake2(
   console.log('sighash', sighash.hash.toString('hex'))
   //const sig = keyPair.signSchnorr(sighash.hash)
 
-  //const sig = btc.crypto.Schnorr.sign(secKey, sighash.hash)
-  //const sig2 = Buffer.from('990ed6f26b08f0ecd15c7f84df52926b42c1fd5a059a6bfd7871ca62859f3093b3d18e312399c4b52dd1cd30f1fbabd2d10713e3aec4b7e0e84400c57531735c', 'hex')
-  //const valid = btc.crypto.Schnorr.verify(secKey.publicKey.toBuffer().slice(1, 33), sighash.hash, sig)
-  //const valid2 = btc.crypto.Schnorr.verify(secKey.publicKey.toBuffer().slice(1, 33), sighash.hash, sig2)
-  //console.log('sig', sig.toString('hex'), valid)
   const keyPair = ECPair.fromWIF(secKey.toWIF(), bitcoin.networks.bitcoin);
 
   const redeemScript = stake.lockingScript.toBuffer()
@@ -355,10 +350,6 @@ export async function unlockStake(
   const { shPreimage, sighash } = getTxCtx(tx1, 0, Buffer.from(tapLeaf, 'hex'))
 
   const sig = btc.crypto.Schnorr.sign(secKey, sighash.hash)
-  const sig2 = Buffer.from('2180f0d3668c9523494fb10e265fc76ba5a1fac24fca6d8b2c5b59f05039b3ac8b63aff2332051d9ce5fda7bbb4e8ce6c11a43d856de20d140b4e2265c73d8ba', 'hex')
-  const valid = btc.crypto.Schnorr.verify(secKey.publicKey.toBuffer().slice(1, 33), sighash.hash, sig)
-  const valid2 = btc.crypto.Schnorr.verify(secKey.publicKey.toBuffer().slice(1, 33), sighash.hash, sig2)
-  console.log('sig', sig.toString('hex'), valid, valid2)
 
   await stake.connect(getDummySigner())
   const stakeCall = await stake.methods.unstake(
