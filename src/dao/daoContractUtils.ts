@@ -46,6 +46,8 @@ function getPsbtFromRawTx(jsonData, network: bitcoin.Network = bitcoin.networks.
 
   // Step 2: Create a new PSBT object
   const psbt = new bitcoin.Psbt({ network });
+  psbt.locktime = jsonData.nLockTime
+  psbt.version = jsonData.version
 
   // Step 3: Add the inputs and outputs from the raw transaction to the PSBT
 
