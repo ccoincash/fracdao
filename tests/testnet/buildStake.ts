@@ -5,8 +5,9 @@ import { bech32m } from 'bech32'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import btc = require('bitcore-lib-inquisition')
-import { buildStake, unlockStake2, getTimeLockScript, unlockTimeLock } from '../../src/dao/daoContractUtils'
+import { buildStake, unlockStake2, getTimeLockScript, unlockTimeLock, buildVote } from '../../src/dao/daoContractUtils'
 import { AddressType } from '../../src/dao/daoProto'
+import { LeafNode, MerkleTreeData } from '../../src/dao/voteMerkleTree'
 const request = require('superagent')
 import * as dotenv from "dotenv"
 
@@ -423,6 +424,18 @@ async function broadcastTransaction(txHex: string) {
   return res.body.data.utxo || []
 }
 
+function createVoteMerkleTree(pubKey: Buffer) {
+  // tree height, decided by the number of leaves
+  const height = 2
+  const merkleTree = new MerkleTreeData(Buffer.alloc(0), height)
+  const leafNode1 = LeafNode.initFromPubKey(AddressType.TAPROOT, pubKey, BigInt(1000000))
+  // fake node
+  const leafNode2 = LeafNode.initFromPubKey(AddressType.TAPROOT, Buffer.alloc(33, 2), BigInt(2000000))
+  merkleTree.updateLeaf(leafNode1) 
+  merkleTree.updateLeaf(leafNode2)
+  return merkleTree
+}
+
 async function main() {
   const inputAmount = 10000
   const addressType = AddressType.TAPROOT
@@ -451,7 +464,15 @@ async function main() {
     const inputSatoshis = process.argv[5] ? parseInt(process.argv[5]) : inputAmount
     const secKey = new btc.PrivateKey.fromWIF(wif, btc.Networks.livenet)
     tx = unlockTimeLock(txid, vout, inputSatoshis, secKey, addressType, FEE)
+  } else if (op == 'createvote') {
+    // proposalId can be a tx outpointer or something saving proposal data
+    const proposalId = Buffer.alloc(36, 1)
+    // create merkle tree of voters
+    const merkleTree = createVoteMerkleTree(keyPair.publicKey)
+    const vote = buildVote(proposalId, merkleTree.merkleRoot)
+    tx = await sendTaprootTx(payment, keyPair, vote.address, 330)
   }
+
   if (tx) {
     const rawTx = tx.toHex ? tx.toHex() : tx.toString()
     console.log('Transaction hex:', rawTx)

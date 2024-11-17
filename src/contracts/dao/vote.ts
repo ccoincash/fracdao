@@ -26,10 +26,10 @@ export class Vote extends SmartContract {
     @prop()
     proposalId: ByteString
 
-    constructor(merkleRoot: ByteString) {
+    constructor(merkleRoot: ByteString, proposalId: ByteString) {
         super(...arguments)
         this.merkleRoot = merkleRoot
-        this.proposalId = hash160(merkleRoot)
+        this.proposalId = proposalId
     }
 
     @method()

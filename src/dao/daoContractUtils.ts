@@ -13,6 +13,7 @@ import {
 } from '../lib/txTools'
 import { MethodCallOptions, toByteString } from 'scrypt-ts'
 import { Stake } from '../contracts/dao/stake'
+import { Vote } from '../contracts/dao/vote'
 import { DaoOpType, AddressType, encodeDaoOpReturnData, LOCK_BLOCK } from './daoProto'
 import * as bitcoin from 'bitcoinjs-lib'
 import * as secp256k1 from 'tiny-secp256k1'
@@ -466,3 +467,22 @@ export function unlockTimeLock(txid, vout, inputSatoshis, secKey, addressType: A
 
   return tx
 }*/
+
+// build a vote contract
+export function buildVote(proposalId: Buffer, merkleRoot: Buffer) {
+  Vote.loadArtifact()
+
+  const vote = new Vote(merkleRoot.toString('hex'), proposalId.toString('hex'))
+
+  const [tPubKey, cblock] = Tap.getPubKey(
+    TAPROOT_ONLY_SCRIPT_PUBKEY.toString('hex'),
+    {
+      target: Tap.encodeScript(vote.lockingScript.toBuffer())
+    }
+  )
+
+  const voteOutputScript = new btc.Script(`OP_1 32 0x${tPubKey}`).toBuffer()
+
+  console.log('buildVote: Vote taproot address', tPubKey, cblock)
+  return { address: tPubKey, vote, voteOutputScript }
+}
