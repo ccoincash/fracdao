@@ -57,7 +57,7 @@ export class LeafNode {
     }
 
     get hash() {
-        return btc.crypto.Hash.sha256(this.serialize())
+        return btc.crypto.Hash.sha256ripemd160(this.serialize())
     }
 
     key() {
@@ -125,7 +125,7 @@ export class MerkleTreeData {
         }
 
         const emptyNodeBuf = LeafNode.EmptyLeafNode().serialize()
-        let emptyHash = btc.crypto.Hash.sha256(emptyNodeBuf)
+        let emptyHash = btc.crypto.Hash.sha256ripemd160(emptyNodeBuf)
         this.emptyHashs.push(emptyHash)
         for (let i = 1; i < height; i++) {
             const prevHash = this.emptyHashs[i - 1]
@@ -136,7 +136,7 @@ export class MerkleTreeData {
     }
 
     getHash(buf1: Buffer, buf2: Buffer) {
-        return btc.crypto.Hash.sha256(Buffer.concat([buf1, buf2]))
+        return btc.crypto.Hash.sha256ripemd160(Buffer.concat([buf1, buf2]))
     }
 
     get merkleRoot() {
@@ -237,7 +237,7 @@ export class MerkleTreeData {
     calMerkleRoot(leafNode: Buffer, merklePath: Buffer) {
         const height = Math.floor(merklePath.length / 33)
 
-        let merkleValue = btc.crypto.Hash.sha256(leafNode)
+        let merkleValue = btc.crypto.Hash.sha256ripemd160(leafNode)
         console.log('merkleValue: ', merkleValue.toString('hex'), leafNode.toString('hex'))
         for (let i = 0; i < height; i++) {
             const neighbor = merklePath.subarray(i * 33, i * 33 + 32)
@@ -326,7 +326,9 @@ export class MerkleTreeData {
         const leafNode = this.leafArray[leafIndex]
 
         let prevHash = this.hashNodes[0]
-        let paths: Buffer[] = []
+        //let paths: Buffer[] = []
+        let neighbor: string[] = []
+        let neighborType: boolean[] = []
 
         if (leafIndex < prevHash.length) {
             prevHash[leafIndex] = leafNode.hash
@@ -343,24 +345,30 @@ export class MerkleTreeData {
             const curIndex = Math.floor(prevIndex / 2)
             // right node
             if (prevIndex % 2 === 1) {
-                paths.push(Buffer.concat([prevHash[prevIndex - 1], RIGHT_FLAG]))
+                //paths.push(Buffer.concat([prevHash[prevIndex - 1], RIGHT_FLAG]))
+                neighbor.push(prevHash[prevIndex - 1].toString('hex'))
+                neighborType.push(false)
             } else { // left node
                 if (curIndex >= curHash.length) {
-                    paths.push(Buffer.concat([this.emptyHashs[i - 1], LEFT_FLAG]))
+                    //paths.push(Buffer.concat([this.emptyHashs[i - 1], LEFT_FLAG]))
+                    neighbor.push(this.emptyHashs[i - 1].toString('hex'))
                 } else {
                     if (prevHash.length > prevIndex + 1) {
-                        paths.push(Buffer.concat([prevHash[prevIndex + 1], LEFT_FLAG]))
+                        //paths.push(Buffer.concat([prevHash[prevIndex + 1], LEFT_FLAG]))
+                        neighbor.push(prevHash[prevIndex + 1].toString('hex'))
                     } else {
-                        paths.push(Buffer.concat([this.emptyHashs[i - 1], LEFT_FLAG]))
+                        //paths.push(Buffer.concat([this.emptyHashs[i - 1], LEFT_FLAG]))
+                        neighbor.push(this.emptyHashs[i - 1].toString('hex'))
                     }
                 }
+                neighborType.push(true)
             }
             prevIndex = curIndex
         }
 
         // push
         //paths.push(Buffer.concat([this.hashNodes[this.hashNodes.length - 1][0], ROOT_FLAG]))
-        return Buffer.concat(paths)
+        return {neighbor, neighborType, leafNode}
     }
 
     serializeLeaf() {

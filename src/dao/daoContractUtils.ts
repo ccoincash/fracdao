@@ -1,5 +1,6 @@
 import { bech32m } from 'bech32'
 import { Tap } from '@cmdcode/tapscript' // Requires node >= 19
+import varuint from 'varuint-bitcoin'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import btc = require('bitcore-lib-inquisition')
@@ -15,6 +16,7 @@ import { MethodCallOptions, toByteString } from 'scrypt-ts'
 import { Stake } from '../contracts/dao/stake'
 import { Vote } from '../contracts/dao/vote'
 import { DaoOpType, AddressType, encodeDaoOpReturnData, LOCK_BLOCK } from './daoProto'
+import { getUInt64Buf, MerkleTreeData } from './voteMerkleTree'
 import * as bitcoin from 'bitcoinjs-lib'
 import * as secp256k1 from 'tiny-secp256k1'
 import ECPairFactory from 'ecpair'
@@ -41,40 +43,6 @@ export function taprootAddressHex2String(addressHex: string) {
 
   const taprootAddress = bech32m.encode('bc', taprootWords);
   return taprootAddress
-}
-
-function getPsbtFromRawTx(jsonData, network: bitcoin.Network = bitcoin.networks.bitcoin) {
-
-  // Step 2: Create a new PSBT object
-  const psbt = new bitcoin.Psbt({ network });
-  psbt.locktime = jsonData.nLockTime
-  psbt.version = jsonData.version
-
-  // Step 3: Add the inputs and outputs from the raw transaction to the PSBT
-
-  // Add inputs
-  for (let i = 0; i < jsonData.inputs.length; i++) {
-    const input = jsonData.inputs[i]
-    psbt.addInput({
-      hash: input.prevTxId,
-      index: input.outputIndex,
-      witnessUtxo: {
-        script: Buffer.from(input.output.script, 'hex'),
-        value: input.output.satoshis,
-      },
-      tapLeafScript: input.tapLeafScript
-    });
-  }
-
-  // Add outputs
-  for (const output of jsonData.outputs) {
-    psbt.addOutput({
-      script: Buffer.from(output.script, 'hex'),
-      value: output.satoshis
-    });
-  }
-
-  return psbt
 }
 
 export function getTimeLockScript(xOnlyPubKey: Buffer) {
@@ -485,4 +453,271 @@ export function buildVote(proposalId: Buffer, merkleRoot: Buffer) {
 
   console.log('buildVote: Vote taproot address', tPubKey, cblock)
   return { address: tPubKey, vote, voteOutputScript }
+}
+
+export function getAddressFromPublicKey(pubKey: btc.PublickKey, network: string, addressType: AddressType) {
+  let at = btc.Address.PayToTaproot
+  if (addressType == AddressType.LEGACY) {
+    at = btc.Address.PayToPubKeyHash
+  } else if (addressType == AddressType.NATIVE_WITNESS) {
+    at = btc.Address.PayToWitnessPublicKeyHash
+  } else if (addressType == AddressType.NESTED_WITNESS) {
+    at = btc.Address.PayToWitnessScriptHash
+  }
+  return btc.Address.fromPublicKey(pubKey, network, at)
+}
+
+export async function unlockVote(
+  txid: string, 
+  vout: number, 
+  inputSatoshis: number, 
+  feeUtxo: any,
+  vote, 
+  secKey: btc.PrivateKey, 
+  voteOutputTaprootAddress: string, 
+  addressType,
+  feePerByte: number,
+  voteMerkleTree: MerkleTreeData,
+) {
+  const voteOutputTaprootScript = new btc.Script(
+    `OP_1 32 0x${voteOutputTaprootAddress}`
+  ) 
+  const tx = new btc.Transaction()
+    .from({
+      txId: txid,
+      outputIndex: vout,
+      script: voteOutputTaprootScript,
+      satoshis: inputSatoshis,
+    })
+
+  // fee tx
+  tx.from(feeUtxo)
+
+  const pubKey = secKey.publicKey
+  const pubKeyPrefix = pubKey.toBuffer().subarray(0, 1)
+  const xOnlyPubKey = toXOnly(pubKey.toBuffer())
+  const address = getAddressFromPublicKey(pubKey, 'testnet', addressType)
+  const changeAddress = address
+  // output
+  const opReturnData = encodeDaoOpReturnData(pubKeyPrefix, xOnlyPubKey, addressType, DaoOpType.VOTE)
+  const opReturnScript = btc.Script.buildDataOut(opReturnData).toBuffer()
+  tx.addOutput(new btc.Transaction.Output({
+    script: opReturnScript,
+    satoshis: 0
+  }))
+  tx.feePerByte(feePerByte)
+  tx.change(changeAddress)
+
+  const tapLeaf = Tap.encodeScript(vote.lockingScript.toBuffer())
+  const [taprootPubKey, cblock] = Tap.getPubKey(
+    TAPROOT_ONLY_SCRIPT_PUBKEY.toString('hex'),
+    {
+      target: tapLeaf,
+    }
+  )
+
+  const { shPreimage, sighash } = getTxCtx(tx, 0, Buffer.from(tapLeaf, 'hex'))
+  console.log('sighash', sighash.hash.toString('hex'))
+
+  const redeemScript = vote.lockingScript.toBuffer()
+  const tapLeaf2 = {
+    output: redeemScript,
+    version: 192
+  };
+  const tapTree = tapLeaf2
+
+  const scriptPayment = bitcoin.payments.p2tr({
+    internalPubkey: TAPROOT_ONLY_SCRIPT_PUBKEY,
+    scriptTree: tapTree,
+    redeem: { output: redeemScript },
+    network: bitcoin.networks.bitcoin
+  });
+  const tapLeafScript = [
+    {
+      leafVersion: 192,
+      script: tapLeaf2.output,
+      controlBlock: scriptPayment.witness![scriptPayment.witness!.length - 1]
+    }
+  ];
+  const txData = tx.toJSON()
+  txData.inputs[0].tapLeafScript = tapLeafScript
+  const disableTweakSigner = address.type !== btc.Address.PayToTaproot
+  const toSignInputs: any[] = []
+  for (let i = 0; i < tx.inputs.length; i++) {
+      toSignInputs.push({
+          index: i,
+          address: address.toString(),
+          disableTweakSigner
+      })
+      if (address.type == btc.Address.PayToTaproot) {
+          txData.inputs[i].tapInternalKey = toXOnly(pubKey.toBuffer()).toString('hex')
+      }
+  }
+  toSignInputs[0].disableTweakSigner = true
+  const psbt = getPsbtFromRawTx(txData)
+  const data = {
+    psbts: [psbt.toHex()],
+    toSignInputs: [toSignInputs],
+  }
+
+  const res = signPsbt(data, secKey.toWIF())
+  const sigs = extractSigs(res, data.toSignInputs)
+  
+  const leafKey = Buffer.concat([Buffer.alloc(1, addressType), pubKey.toBuffer()])
+  const { neighbor, neighborType, leafNode } = voteMerkleTree.getMerklePath(leafKey)
+  const leafData = {
+    addressType: Buffer.alloc(1, leafNode.addressType).toString('hex'),
+    pubKeyPrefix: Buffer.alloc(1, leafNode.pubKey.subarray(0, 1)).toString('hex'),
+    xOnlyPubKey: toXOnly(leafNode.pubKey).toString('hex'),
+    stakeSatoshis: getUInt64Buf(leafNode.stakeAmount).toString('hex'),
+  }
+  const choice = 1
+  await vote.connect(getDummySigner())
+  const voteCall = await vote.methods.vote(
+    choice,
+    shPreimage,
+    () => sigs[0][0],
+    leafData,
+    neighbor,
+    neighborType,
+    {
+        fromUTXO: getDummyUTXO(inputSatoshis),
+        verify: false,
+        exec: true, // set true to debug
+    } as MethodCallOptions<Vote>
+  )
+  const callArgs = callToBufferList(voteCall)
+  const witnesses = [
+    ...callArgs,
+    vote.lockingScript.toBuffer(),
+    Buffer.from(cblock, 'hex'),
+  ]
+  tx.inputs[0].witnesses = witnesses
+  if (address.type === btc.Address.PayToWitnessPublicKeyHash) {
+    tx.inputs[1].witnesses = [Buffer.from(sigs[0][1], 'hex'), pubKey.toBuffer()]
+  } else if (address.type === btc.Address.PayToTaproot) {
+    tx.inputs[1].witnesses = [Buffer.from(sigs[0][1], 'hex')]
+  } // TODO: PayToPubKeyHash and PayToWitnessScriptHash
+
+  return tx
+}
+
+export function serializeScript(s: Buffer): Buffer {
+  const varintLen = varuint.encodingLength(s.length);
+  const buffer = Buffer.allocUnsafe(varintLen); // better
+  varuint.encode(s.length, buffer);
+  return Buffer.concat([buffer, s]);
+}
+
+export function signPsbt(data: any, wif: string, network = bitcoin.networks.bitcoin) {
+  // sign
+  const keyPair = ECPair.fromWIF(wif, network);
+  const tweakedSigner = keyPair.tweak(
+    bitcoin.crypto.taggedHash('TapTweak', toXOnly(keyPair.publicKey)),
+  );
+
+  // sign
+  const psbts: bitcoin.Psbt[] = []
+  for (let i = 0; i < data.psbts!.length; i++) {
+    const psbtHex = data.psbts![i]
+    const psbt = bitcoin.Psbt.fromHex(psbtHex)
+    for (let j = 0; j < data.toSignInputs![i].length; j++) {
+      const args = data.toSignInputs![i][j]
+      const signer = args.disableTweakSigner === true ? keyPair : tweakedSigner
+      const input = psbt.data.inputs[args.index]
+      if (input.tapLeafScript) {
+        const tapLeaf = psbt.data.inputs[args.index].tapLeafScript![0]
+        const hash = bitcoin.crypto.taggedHash(
+          'TapLeaf',
+          Buffer.concat([Buffer.from([tapLeaf.leafVersion]), serializeScript(tapLeaf.script)]),
+        );
+        console.debug("signPsbt: sighash %s", hash.toString('hex'))
+        psbt.signTaprootInput(args.index, signer, hash)
+      } else {
+        psbt.signInput(args.index, signer)
+      }
+    }
+    psbts.push(psbt)
+  }
+  return psbts
+}
+
+export function extractSigs(psbts: bitcoin.Psbt[], toSignInputs: any[]) {
+
+  const sigs: string[][] = []
+  // extract sigs
+  for (let i = 0; i < psbts.length; i++) {
+    sigs.push(Array(psbts[i].data.inputs.length).fill(''))
+    const psbt = psbts[i]
+    for (let j = 0; j < toSignInputs[i].length; j++) {
+      const index = toSignInputs[i][j].index
+      const input = psbt.data.inputs[index]
+      let sig
+      if (input.tapLeafScript || input.tapKeySig) {
+        sig = input.tapKeySig || input.tapScriptSig![0].signature
+      } else {
+        sig = input.partialSig![0].signature || Buffer.alloc(0)
+      }
+      sigs[i][index] = sig.toString('hex')
+    }
+  }
+  return sigs
+}
+
+export function createPsbtToSign(tx: btc.Transaction, address: btc.Address, pubKeyBuf: Buffer) {
+
+  // create psbt to sign
+  const disableTweakSigner = address.type !== btc.Address.PayToTaproot
+  const txData = tx.toJSON()
+  const toSignInputs: any[] = []
+  for (let i = 0; i < tx.inputs.length; i++) {
+      toSignInputs.push({
+          index: i,
+          address: address.toString(),
+          disableTweakSigner
+      })
+      if (address.type == btc.Address.PayToTaproot) {
+          txData.inputs[i].tapInternalKey = toXOnly(pubKeyBuf).toString('hex')
+      }
+  }
+  const psbt = getPsbtFromRawTx(txData)
+  return { psbt, toSignInputs }
+}
+
+export function getPsbtFromRawTx(jsonData, network: bitcoin.Network = bitcoin.networks.testnet) {
+
+  const psbt = new bitcoin.Psbt({ network });
+
+  psbt.locktime = jsonData.nLockTime
+  psbt.version = jsonData.version
+  // Add inputs
+  for (let i = 0; i < jsonData.inputs.length; i++) {
+      const input = jsonData.inputs[i]
+      const data: any = {
+          hash: input.prevTxId,
+          index: input.outputIndex,
+          witnessUtxo: {
+              script: Buffer.from(input.output.script, 'hex'),
+              value: input.output.satoshis,
+          },
+          sequence: input.sequenceNumber
+      }
+      if (input.tapInternalKey) {
+          data.tapInternalKey = Buffer.from(input.tapInternalKey, 'hex')
+      }
+      if (input.tapLeafScript) {
+          data.tapLeafScript = input.tapLeafScript
+      }
+      psbt.addInput(data)
+  }
+
+  // Add outputs
+  for (const output of jsonData.outputs) {
+      psbt.addOutput({
+          script: Buffer.from(output.script, 'hex'),
+          value: output.satoshis
+      });
+  }
+
+  return psbt
 }

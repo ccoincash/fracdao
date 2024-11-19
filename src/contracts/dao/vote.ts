@@ -34,10 +34,10 @@ export class Vote extends SmartContract {
 
     @method()
     public vote(
+        choice: bigint,
         shPreimage: SHPreimage,
         // input
         sig: Sig,
-        choice: ByteString,
         // mekle tree leaf data
         leafData: VoteLeaf,
         neighbour: FixedArray<ByteString, typeof HEIGHT>,

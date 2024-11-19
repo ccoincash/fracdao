@@ -7,7 +7,8 @@
     "node": ">=19.9.0"
   },
   "scripts": {
-    "compile": "npx scrypt-cli compile"
+    "compile": "npx scrypt-cli compile",
+    "postinstall": "patch-package"
   },
   "lint-staged": {
     "**/*": [

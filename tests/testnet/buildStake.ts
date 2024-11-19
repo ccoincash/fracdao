@@ -5,7 +5,7 @@ import { bech32m } from 'bech32'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import btc = require('bitcore-lib-inquisition')
-import { buildStake, unlockStake2, getTimeLockScript, unlockTimeLock, buildVote } from '../../src/dao/daoContractUtils'
+import { buildStake, unlockStake2, getTimeLockScript, unlockTimeLock, buildVote, unlockVote } from '../../src/dao/daoContractUtils'
 import { AddressType } from '../../src/dao/daoProto'
 import { LeafNode, MerkleTreeData } from '../../src/dao/voteMerkleTree'
 const request = require('superagent')
@@ -426,7 +426,7 @@ async function broadcastTransaction(txHex: string) {
 
 function createVoteMerkleTree(pubKey: Buffer) {
   // tree height, decided by the number of leaves
-  const height = 2
+  const height = 16
   const merkleTree = new MerkleTreeData(Buffer.alloc(0), height)
   const leafNode1 = LeafNode.initFromPubKey(AddressType.TAPROOT, pubKey, BigInt(1000000))
   // fake node
@@ -471,6 +471,31 @@ async function main() {
     const merkleTree = createVoteMerkleTree(keyPair.publicKey)
     const vote = buildVote(proposalId, merkleTree.merkleRoot)
     tx = await sendTaprootTx(payment, keyPair, vote.address, 330)
+  } else if (op == 'unlockvote') {
+    const txid = process.argv[3]
+    const vout = parseInt(process.argv[4])
+    const inputSatoshis = process.argv[5] ? parseInt(process.argv[5]) : 330
+    const feePerByte = 5
+    // get fee utxo
+    const utxos = await getUTXOs(payment.address);
+
+    if (utxos.length === 0) {
+      console.log('No UTXOs found for this address.');
+      return;
+    }
+    const feeUtxo = {
+      txId: utxos[0].txid,
+      outputIndex: utxos[0].vout,
+      satoshis: utxos[0].satoshi,
+      script: utxos[0].scriptPk
+    }
+
+    const proposalId = Buffer.alloc(36, 1)
+    // create merkle tree of voters
+    const merkleTree = createVoteMerkleTree(keyPair.publicKey)
+    const buildRes = buildVote(proposalId, merkleTree.merkleRoot)
+    const secKey = new btc.PrivateKey.fromWIF(wif, btc.Networks.livenet)
+    tx = await unlockVote(txid, vout, inputSatoshis, feeUtxo, buildRes.vote, secKey, buildRes.address, addressType, feePerByte, merkleTree)
   }
 
   if (tx) {
